@@ -56,7 +56,7 @@ export interface CreateBidAttrs {
 
 export interface Session {
 	id: string;
-	userId: string | null;
+	userId: string;
 	username: string;
 }
 
