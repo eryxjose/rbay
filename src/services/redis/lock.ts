@@ -1,9 +1,10 @@
 import { randomBytes } from 'crypto';
 import { client } from './client';
 
-export const withLock = async (key: string, cb: (signal: any) => any) => {
+export const withLock = async (key: string, cb: (client: Client, signal: any) => any) => {
 	// Initialize variables to control retry behavior
 	const retryDelay = 100; // milliseconds
+	const timeoutMs = 2000; // milliseconds
 	let retries = 20; // number of retries
 
 	// Generate random value for lock ownership
@@ -19,7 +20,7 @@ export const withLock = async (key: string, cb: (signal: any) => any) => {
 		// Try to do a SET NX operation
 		const acquired = await client.set(lockKey, token, {
 			NX: true, // Set only if not exists
-			PX: 2000 // Set expiration time to 2000 milliseconds
+			PX: timeoutMs // Set expiration time to 2000 milliseconds
 		});
 		
 		if (!acquired) {
@@ -31,15 +32,13 @@ export const withLock = async (key: string, cb: (signal: any) => any) => {
 		// If the SET is successful, run the callback 
 		try {
 			const signal = { expired: false };
-			
 			setTimeout(() => {
 				signal.expired = true;
-			}, 2000);
+			}, timeoutMs);
 
-			const result = await cb(signal);
+			const proxiedClient = buildClientProxy(timeoutMs);
+			const result = await cb(proxiedClient, signal);
 			return result;
-		} catch (error) {
-			throw error;
 		} finally {
 			// Release the lock by deleting the key
 			client.unlock(lockKey, token);
@@ -47,7 +46,24 @@ export const withLock = async (key: string, cb: (signal: any) => any) => {
 	}
 };
 
-const buildClientProxy = () => {};
+type Client = typeof client;
+const buildClientProxy = (timeout: number) => {
+	const startTime = Date.now();
+
+	const handler = {
+		get(target: Client, prop: keyof Client) {
+			if (Date.now() >= startTime + timeout) {
+				throw new Error('Lock expired');
+			}
+
+			const value = target[prop];
+
+			return typeof value === 'function' ? value.bind(target) : value;
+		}
+	}
+
+	return new Proxy(client, handler) as Client;
+};
 
 const pause = (duration: number) => {
 	return new Promise((resolve) => {
